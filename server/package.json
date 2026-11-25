@@ -1,0 +1,12 @@
+{
+  "name": "chikaku-server",
+  "version": "1.0.0",
+  "description": "Chikaku 24-hour 2-person live location, chat, and voice note WebSocket server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
