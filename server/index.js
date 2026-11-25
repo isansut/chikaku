@@ -5,11 +5,11 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24 jam
-const LATEST_VERSION = process.env.APP_VERSION || '1.1.2';
-const LATEST_BUILD = Number(process.env.APP_BUILD || 8);
+const LATEST_VERSION = process.env.APP_VERSION || '1.1.3';
+const LATEST_BUILD = Number(process.env.APP_BUILD || 9);
 const RELEASE_NOTES =
   process.env.APP_NOTES ||
-  'Suara notifikasi kustom (Chat & Colek), heartbeat anti-putus di latar belakang (stopWithTask=false).';
+  'Perbaikan GPS & koneksi WebSocket di iOS (tidak melenceng ke Monas lagi) + default server wss://chikaku-server.fly.dev.';
 
 // In-memory store for multi-user group rooms
 // roomCode -> { expiresAt, users: Map<userId, { ws, name, color, bio, location, online, lastSeen }>, messages: [] }

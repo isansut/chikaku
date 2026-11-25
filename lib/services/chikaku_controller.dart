@@ -4,8 +4,11 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:battery_plus/battery_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'
+    as fln;
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -16,6 +19,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/chikaku_models.dart';
 import 'background_service.dart';
@@ -35,7 +39,7 @@ class ChikakuController extends ChangeNotifier {
   int userColor = 0xFF5B4CF5;
   String userBio = '';
   String roomCode = '';
-  String serverUrl = 'ws://192.168.1.10:3000';
+  String serverUrl = 'wss://chikaku-server.fly.dev';
   int updateIntervalSeconds = 5;
   String myStatusEmoji = '📍';
   String myStatusText = 'Live 24 Jam';
@@ -49,8 +53,8 @@ class ChikakuController extends ChangeNotifier {
   String? connectionError;
   int sessionExpiresAt = 0;
 
-  String appVersion = '1.1.2';
-  int appBuildNumber = 8;
+  String appVersion = '1.1.3';
+  int appBuildNumber = 9;
 
   UserLocation? myLocation;
   final Map<String, RoomMember> members = {};
@@ -101,6 +105,19 @@ class ChikakuController extends ChangeNotifier {
 
   Timer? _countdownTimer;
 
+  // Direct iOS/non-Android transport & GPS
+  WebSocketChannel? _directChannel;
+  StreamSubscription? _directWsSub;
+  StreamSubscription<Position>? _directPosSub;
+  Timer? _directReconnectTimer;
+  Timer? _directHeartbeatTimer;
+  final Battery _battery = Battery();
+  int _cachedBattery = 100;
+  final fln.FlutterLocalNotificationsPlugin _iosNotif =
+      fln.FlutterLocalNotificationsPlugin();
+  bool _iosNotifReady = false;
+  int _iosNotifId = 900;
+
   ChikakuController() {
     _initAudioPlayer();
   }
@@ -122,14 +139,18 @@ class ChikakuController extends ChangeNotifier {
   }
 
   Future<void> init() async {
-    FlutterForegroundTask.initCommunicationPort();
-    FlutterForegroundTask.addTaskDataCallback(_onBackgroundData);
-    _initForegroundTaskOptions();
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.initCommunicationPort();
+      FlutterForegroundTask.addTaskDataCallback(_onBackgroundData);
+      _initForegroundTaskOptions();
+    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+      await _initIosNotifications();
+    }
 
     try {
       final pkg = await PackageInfo.fromPlatform();
       appVersion = pkg.version;
-      appBuildNumber = int.tryParse(pkg.buildNumber) ?? 2;
+      appBuildNumber = int.tryParse(pkg.buildNumber) ?? 9;
     } catch (_) {}
 
     final prefs = await SharedPreferences.getInstance();
@@ -140,7 +161,8 @@ class ChikakuController extends ChangeNotifier {
     userColor = prefs.getInt(_prefColor) ?? 0xFF5B4CF5;
     userBio = prefs.getString(_prefBio) ?? '';
     roomCode = prefs.getString(_prefRoomCode) ?? '';
-    serverUrl = prefs.getString(_prefServerUrl) ?? 'ws://192.168.1.10:3000';
+    serverUrl =
+        prefs.getString(_prefServerUrl) ?? 'wss://chikaku-server.fly.dev';
     updateIntervalSeconds = prefs.getInt(_prefInterval) ?? 5;
 
     isPaired = userName.isNotEmpty && roomCode.isNotEmpty;
@@ -235,12 +257,16 @@ class ChikakuController extends ChangeNotifier {
     myStatusText = statusText.trim().isEmpty ? 'Live 24 Jam' : statusText.trim();
     notifyListeners();
 
-    FlutterForegroundTask.sendDataToTask({
-      'cmd': 'status',
-      'emoji': myStatusEmoji,
-      'text': myStatusText,
-    });
-    FlutterForegroundTask.sendDataToTask({'cmd': 'reload_prefs'});
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'status',
+        'emoji': myStatusEmoji,
+        'text': myStatusText,
+      });
+      FlutterForegroundTask.sendDataToTask({'cmd': 'reload_prefs'});
+    } else {
+      _connectDirectWs();
+    }
   }
 
   Future<void> updateSettings({
@@ -272,13 +298,21 @@ class ChikakuController extends ChangeNotifier {
 
     notifyListeners();
 
-    FlutterForegroundTask.sendDataToTask({
-      'cmd': 'status',
-      'emoji': myStatusEmoji,
-      'text': myStatusText,
-    });
-    if (needReload) {
-      FlutterForegroundTask.sendDataToTask({'cmd': 'reload_prefs'});
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'status',
+        'emoji': myStatusEmoji,
+        'text': myStatusText,
+      });
+      if (needReload) {
+        FlutterForegroundTask.sendDataToTask({'cmd': 'reload_prefs'});
+      }
+    } else {
+      if (needReload) {
+        await _connectDirectWs();
+      } else {
+        _sendDirectCurrentLocation();
+      }
     }
   }
 
@@ -292,13 +326,6 @@ class ChikakuController extends ChangeNotifier {
         DateTime.now().add(const Duration(hours: 24)).millisecondsSinceEpoch;
     _startCountdownTimer();
     await _requestPermissions();
-
-    // Default fallback until GPS locks
-    myLocation ??= UserLocation(
-      lat: -6.175392,
-      lng: 106.827153,
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-    );
 
     if (defaultTargetPlatform == TargetPlatform.android) {
       if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
@@ -316,6 +343,10 @@ class ChikakuController extends ChangeNotifier {
           callback: chikakuStartCallback,
         );
       }
+    } else {
+      // iOS / non-Android: run native Geolocator + WebSocket directly
+      await _startDirectLocationTracking();
+      await _connectDirectWs();
     }
   }
 
@@ -465,18 +496,28 @@ class ChikakuController extends ChangeNotifier {
   }
 
   void _sendWs(Map<String, dynamic> payload) {
-    FlutterForegroundTask.sendDataToTask({
-      'cmd': 'send_ws',
-      'payload': payload,
-    });
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'send_ws',
+        'payload': payload,
+      });
+    } else {
+      try {
+        _directChannel?.sink.add(jsonEncode(payload));
+      } catch (_) {}
+    }
   }
 
   void togglePauseSharing() {
     isSharingPaused = !isSharingPaused;
-    FlutterForegroundTask.sendDataToTask({
-      'cmd': 'pause',
-      'paused': isSharingPaused,
-    });
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'pause',
+        'paused': isSharingPaused,
+      });
+    } else if (!isSharingPaused) {
+      _sendDirectCurrentLocation();
+    }
     notifyListeners();
   }
 
@@ -771,6 +812,9 @@ class ChikakuController extends ChangeNotifier {
   Future<void> leaveRoom() async {
     if (defaultTargetPlatform == TargetPlatform.android) {
       await FlutterForegroundTask.stopService();
+    } else {
+      await _disconnectDirectWs();
+      await _directPosSub?.cancel();
     }
     _countdownTimer?.cancel();
 
@@ -789,7 +833,11 @@ class ChikakuController extends ChangeNotifier {
 
   @override
   void dispose() {
-    FlutterForegroundTask.removeTaskDataCallback(_onBackgroundData);
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.removeTaskDataCallback(_onBackgroundData);
+    }
+    _disconnectDirectWs();
+    _directPosSub?.cancel();
     _countdownTimer?.cancel();
     _recordingTimer?.cancel();
     _recorder.dispose();
@@ -797,5 +845,203 @@ class ChikakuController extends ChangeNotifier {
     _nudgeController.close();
     _photoReqController.close();
     super.dispose();
+  }
+
+  // --- Direct iOS / non-Android GPS, WebSocket & Local Notifications ---
+  Future<void> _initIosNotifications() async {
+    if (_iosNotifReady) return;
+    try {
+      const darwinInit = fln.DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestBadgePermission: true,
+        requestSoundPermission: true,
+      );
+      await _iosNotif.initialize(
+        settings: const fln.InitializationSettings(iOS: darwinInit),
+      );
+      _iosNotifReady = true;
+    } catch (_) {}
+  }
+
+  Future<void> _showIosNotification(String title, String body) async {
+    if (!_iosNotifReady) return;
+    try {
+      const details = fln.DarwinNotificationDetails(
+        presentAlert: true,
+        presentBanner: true,
+        presentSound: true,
+      );
+      await _iosNotif.show(
+        id: _iosNotifId++,
+        title: title,
+        body: body,
+        notificationDetails: const fln.NotificationDetails(iOS: details),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _startDirectLocationTracking() async {
+    await _directPosSub?.cancel();
+    if (defaultTargetPlatform != TargetPlatform.iOS &&
+        defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+      await _onDirectPosition(pos);
+
+      final LocationSettings settings = defaultTargetPlatform == TargetPlatform.iOS
+          ? AppleSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 5,
+              allowBackgroundLocationUpdates: true,
+              pauseLocationUpdatesAutomatically: false,
+              showBackgroundLocationIndicator: true,
+            )
+          : const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 5,
+            );
+
+      _directPosSub = Geolocator.getPositionStream(locationSettings: settings)
+          .listen(_onDirectPosition, onError: (_) {});
+    } catch (_) {}
+  }
+
+  Future<void> _onDirectPosition(Position pos) async {
+    try {
+      _cachedBattery = await _battery.batteryLevel;
+    } catch (_) {
+      _cachedBattery = 100;
+    }
+    myLocation = UserLocation(
+      lat: pos.latitude,
+      lng: pos.longitude,
+      speed: pos.speed,
+      accuracy: pos.accuracy,
+      battery: _cachedBattery,
+      statusEmoji: myStatusEmoji,
+      statusText: myStatusText,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+    );
+    _appendTrailPoint(myTrail, myLocation!.latLng);
+    notifyListeners();
+    _sendDirectCurrentLocation();
+  }
+
+  void _sendDirectCurrentLocation() {
+    if (isSharingPaused || myLocation == null || !isConnected) return;
+    _sendWs({'type': 'location', ...myLocation!.toJson()});
+  }
+
+  Future<void> _connectDirectWs() async {
+    await _disconnectDirectWs();
+    if (roomCode.isEmpty || serverUrl.isEmpty) return;
+
+    try {
+      _directChannel = WebSocketChannel.connect(Uri.parse(serverUrl));
+      await _directChannel!.ready;
+      isConnected = true;
+      connectionError = null;
+
+      _sendWs({
+        'type': 'join',
+        'roomCode': roomCode,
+        'userId': userId,
+        'name': userName,
+        'color': userColor,
+        'bio': userBio,
+      });
+      _sendDirectCurrentLocation();
+
+      _directHeartbeatTimer?.cancel();
+      _directHeartbeatTimer =
+          Timer.periodic(const Duration(seconds: 25), (_) {
+        if (isConnected) _sendWs({'type': 'ping'});
+      });
+
+      _directWsSub = _directChannel!.stream.listen(
+        (raw) {
+          try {
+            final data = jsonDecode(raw.toString()) as Map<String, dynamic>;
+            if (data['type'] == 'pong') return;
+            _handleWsMessage(data);
+            if (defaultTargetPlatform == TargetPlatform.iOS) {
+              _notifyIosIfNeeded(data);
+            }
+          } catch (_) {}
+        },
+        onError: (_) {
+          isConnected = false;
+          connectionError = 'Gagal terhubung ke server';
+          notifyListeners();
+          _scheduleDirectReconnect();
+        },
+        onDone: () {
+          isConnected = false;
+          notifyListeners();
+          _scheduleDirectReconnect();
+        },
+      );
+      notifyListeners();
+    } catch (_) {
+      isConnected = false;
+      connectionError = 'Server tidak terjangkau ($serverUrl)';
+      notifyListeners();
+      _scheduleDirectReconnect();
+    }
+  }
+
+  void _notifyIosIfNeeded(Map<String, dynamic> data) {
+    final type = data['type'] as String?;
+    if (type == 'message' && data['message'] is Map) {
+      final msg = data['message'] as Map;
+      if (msg['senderId'] != userId) {
+        final name = msg['senderName'] ?? 'Anggota';
+        if (msg['type'] == 'voice_note') {
+          _showIosNotification('$name • Voice Note 🎤', 'Mengirim pesan suara');
+        } else if (msg['type'] == 'image') {
+          _showIosNotification('$name • Foto 📷', 'Mengirim foto baru');
+        } else {
+          _showIosNotification('$name 💬', '${msg['text'] ?? 'Pesan baru'}');
+        }
+      }
+    } else if (type == 'nudge') {
+      _showIosNotification(
+        '${data['emoji'] ?? '👋'} ${data['senderName'] ?? 'Pasangan'}',
+        '${data['label'] ?? 'Colek kamu!'}',
+      );
+    } else if (type == 'photo_request') {
+      _showIosNotification(
+        '📸 ${data['senderName'] ?? 'Pasangan'} Minta Foto',
+        'Tap untuk ambil foto kamera ${data['camera'] == 'front' ? 'Depan' : 'Belakang'}',
+      );
+    }
+  }
+
+  void _scheduleDirectReconnect() {
+    if (!isPaired) return;
+    _directReconnectTimer?.cancel();
+    _directReconnectTimer = Timer(const Duration(seconds: 4), _connectDirectWs);
+  }
+
+  Future<void> _disconnectDirectWs() async {
+    _directReconnectTimer?.cancel();
+    _directHeartbeatTimer?.cancel();
+    await _directWsSub?.cancel();
+    await _directChannel?.sink.close();
+    _directChannel = null;
   }
 }
