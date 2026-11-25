@@ -222,13 +222,18 @@ class ChikakuTaskHandler extends TaskHandler {
             final uid = m['userId'] as String?;
             if (uid != null) _members[uid] = m;
           }
+        } else if (data['partner'] is Map) {
+          final m = Map<String, dynamic>.from(data['partner'] as Map);
+          final uid = m['userId'] as String?;
+          if (uid != null) _members[uid] = m;
         }
         if (_lastMyLocation != null && !_isPaused) {
           _sendWs({'type': 'location', ..._lastMyLocation!});
         }
-      } else if (type == 'member_status') {
-        if (data['member'] != null) {
-          final m = Map<String, dynamic>.from(data['member'] as Map);
+      } else if (type == 'member_status' || type == 'partner_status') {
+        final rawMember = data['member'] ?? data['partner'];
+        if (rawMember != null) {
+          final m = Map<String, dynamic>.from(rawMember as Map);
           final uid = m['userId'] as String?;
           if (uid != null) {
             final wasOnline = (_members[uid]?['online'] as bool?) ?? false;
@@ -242,7 +247,7 @@ class ChikakuTaskHandler extends TaskHandler {
             }
           }
         }
-      } else if (type == 'member_location') {
+      } else if (type == 'member_location' || type == 'partner_location') {
         final uid = data['userId'] as String? ?? 'member';
         _members[uid] = {
           'userId': uid,

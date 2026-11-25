@@ -53,8 +53,8 @@ class ChikakuController extends ChangeNotifier {
   String? connectionError;
   int sessionExpiresAt = 0;
 
-  String appVersion = '1.1.3';
-  int appBuildNumber = 9;
+  String appVersion = '1.1.4';
+  int appBuildNumber = 10;
 
   UserLocation? myLocation;
   final Map<String, RoomMember> members = {};
@@ -435,6 +435,15 @@ class ChikakuController extends ChangeNotifier {
             _appendTrailPoint(trail, m.location!.latLng);
           }
         }
+      } else if (data['partner'] is Map) {
+        members.clear();
+        final m = RoomMember.fromJson(
+            Map<String, dynamic>.from(data['partner'] as Map));
+        members[m.userId] = m;
+        if (m.location != null) {
+          final trail = memberTrails.putIfAbsent(m.userId, () => []);
+          _appendTrailPoint(trail, m.location!.latLng);
+        }
       }
       if (data['history'] is List) {
         messages.clear();
@@ -444,14 +453,15 @@ class ChikakuController extends ChangeNotifier {
         }
       }
       notifyListeners();
-    } else if (type == 'member_status') {
-      if (data['member'] != null) {
+    } else if (type == 'member_status' || type == 'partner_status') {
+      final rawMember = data['member'] ?? data['partner'];
+      if (rawMember != null) {
         final m = RoomMember.fromJson(
-            Map<String, dynamic>.from(data['member'] as Map));
+            Map<String, dynamic>.from(rawMember as Map));
         members[m.userId] = m;
         notifyListeners();
       }
-    } else if (type == 'member_location') {
+    } else if (type == 'member_location' || type == 'partner_location') {
       final uid = data['userId'] as String? ?? 'member';
       final loc = UserLocation.fromJson(
           Map<String, dynamic>.from(data['location'] as Map));
