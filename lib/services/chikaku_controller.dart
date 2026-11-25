@@ -53,8 +53,8 @@ class ChikakuController extends ChangeNotifier {
   String? connectionError;
   int sessionExpiresAt = 0;
 
-  String appVersion = '1.1.4';
-  int appBuildNumber = 10;
+  String appVersion = '1.1.5';
+  int appBuildNumber = 11;
 
   UserLocation? myLocation;
   final Map<String, RoomMember> members = {};
@@ -562,6 +562,20 @@ class ChikakuController extends ChangeNotifier {
       'emoji': emoji,
       'label': label,
     });
+  }
+
+  void sendTestNotification({bool colek = false}) {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'test_notif',
+        'colek': colek,
+      });
+    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+      _showIosNotification(
+        'Tes Notifikasi Chikaku 🔔',
+        'Suara & pop-up notifikasi berfungsi normal!',
+      );
+    }
   }
 
   void requestPartnerPhoto({required bool useFrontCamera}) {

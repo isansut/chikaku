@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -1448,14 +1449,34 @@ class _VoiceNoteContent extends StatelessWidget {
   }
 }
 
-class _ImageBubbleContent extends StatelessWidget {
+class _ImageBubbleContent extends StatefulWidget {
   final String imageBase64;
 
   const _ImageBubbleContent({required this.imageBase64});
 
   @override
+  State<_ImageBubbleContent> createState() => _ImageBubbleContentState();
+}
+
+class _ImageBubbleContentState extends State<_ImageBubbleContent> {
+  late Uint8List _bytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _bytes = base64Decode(widget.imageBase64);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ImageBubbleContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageBase64 != widget.imageBase64) {
+      _bytes = base64Decode(widget.imageBase64);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final bytes = base64Decode(imageBase64);
     return GestureDetector(
       onTap: () {
         showDialog(
@@ -1466,7 +1487,13 @@ class _ImageBubbleContent extends StatelessWidget {
             child: Stack(
               children: [
                 InteractiveViewer(
-                  child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
+                  child: Center(
+                    child: Image.memory(
+                      _bytes,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                    ),
+                  ),
                 ),
                 Positioned(
                   top: 8,
@@ -1484,10 +1511,11 @@ class _ImageBubbleContent extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: Image.memory(
-          bytes,
+          _bytes,
           width: 210,
           height: 240,
           fit: BoxFit.cover,
+          gaplessPlayback: true,
         ),
       ),
     );

@@ -244,6 +244,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
+            onPressed: () => c.sendTestNotification(),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(48),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+            ),
+            icon: const Icon(Icons.notifications_active_outlined),
+            label: const Text('Tes Notifikasi & Suara'),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
             onPressed: () async {
               final update = await c.checkForUpdate();
               if (!context.mounted) return;

@@ -110,6 +110,10 @@ class _PermissionGateScreenState extends State<PermissionGateScreen>
       Permission.notification,
     ].request();
 
+    if (await Permission.location.isGranted) {
+      await Permission.locationAlways.request();
+    }
+
     await _checkAllPermissions();
 
     if (!_allGranted && mounted) {

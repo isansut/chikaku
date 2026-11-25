@@ -5,8 +5,8 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24 jam
-const LATEST_VERSION = process.env.APP_VERSION || '1.1.4';
-const LATEST_BUILD = Number(process.env.APP_BUILD || 10);
+const LATEST_VERSION = process.env.APP_VERSION || '1.1.5';
+const LATEST_BUILD = Number(process.env.APP_BUILD || 11);
 const RELEASE_NOTES =
   process.env.APP_NOTES ||
   'Perbaikan GPS & koneksi WebSocket di iOS (tidak melenceng ke Monas lagi) + default server wss://chikaku-server.fly.dev.';

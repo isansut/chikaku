@@ -135,7 +135,25 @@ class ChikakuTaskHandler extends TaskHandler {
         body: body,
         notificationDetails: fln.NotificationDetails(android: details),
       );
-    } catch (_) {}
+    } catch (_) {
+      // Fallback to default sound if custom raw sound fails on OEM ROM
+      try {
+        const fallback = fln.AndroidNotificationDetails(
+          'chikaku_fallback',
+          'Chikaku Notifikasi',
+          importance: fln.Importance.max,
+          priority: fln.Priority.high,
+          playSound: true,
+          enableVibration: true,
+        );
+        await _notifications.show(
+          id: _notifId++,
+          title: title,
+          body: body,
+          notificationDetails: const fln.NotificationDetails(android: fallback),
+        );
+      } catch (_) {}
+    }
   }
 
   Future<void> _refreshBattery() async {
@@ -407,6 +425,12 @@ class ChikakuTaskHandler extends TaskHandler {
       }
     } else if (cmd == 'reload_prefs') {
       _loadPrefs().then((_) => _connectWs());
+    } else if (cmd == 'test_notif') {
+      _showHeadsUp(
+        'Tes Notifikasi Chikaku 🔔',
+        'Suara & pop-up notifikasi berfungsi normal!',
+        isColek: data['colek'] == true,
+      );
     } else if (cmd == 'sync_state') {
       FlutterForegroundTask.sendDataToMain({
         'event': 'sync_reply',
