@@ -89,12 +89,12 @@ class RoomMember {
 
   factory RoomMember.fromJson(Map<String, dynamic> json) {
     return RoomMember(
-      userId: json['userId'] as String? ?? 'member',
+      userId: (json['userId'] ?? json['user_id']) as String? ?? 'member',
       name: json['name'] as String? ?? 'Anggota',
       color: (json['color'] as num?)?.toInt() ?? 0xFFFF5A79,
       bio: json['bio'] as String? ?? '',
       online: json['online'] as bool? ?? false,
-      lastSeen: (json['lastSeen'] as num?)?.toInt() ??
+      lastSeen: ((json['lastSeen'] ?? json['last_seen']) as num?)?.toInt() ??
           DateTime.now().millisecondsSinceEpoch,
       location: json['location'] != null
           ? UserLocation.fromJson(
@@ -136,7 +136,8 @@ class ChatMessage {
   });
 
   factory ChatMessage.fromJson(Map<String, dynamic> json, String myUserId) {
-    final senderId = json['senderId'] as String? ?? '';
+    final senderId =
+        (json['senderId'] ?? json['sender_id']) as String? ?? '';
     final typeStr = json['type'] as String? ?? 'chat';
     final msgType = typeStr == 'voice_note'
         ? ChatMessageType.voiceNote
@@ -146,12 +147,16 @@ class ChatMessage {
           DateTime.now().millisecondsSinceEpoch.toString(),
       type: msgType,
       senderId: senderId,
-      senderName: json['senderName'] as String? ?? 'Teman',
-      senderColor: (json['senderColor'] as num?)?.toInt() ?? 0xFFFF5A79,
+      senderName:
+          (json['senderName'] ?? json['sender_name']) as String? ?? 'Teman',
+      senderColor:
+          ((json['senderColor'] ?? json['sender_color']) as num?)?.toInt() ??
+              0xFFFF5A79,
       text: json['text'] as String?,
-      audioBase64: json['audioBase64'] as String?,
-      imageBase64: json['imageBase64'] as String?,
-      durationMs: (json['durationMs'] as num?)?.toInt() ?? 0,
+      audioBase64: (json['audioBase64'] ?? json['audio_base64']) as String?,
+      imageBase64: (json['imageBase64'] ?? json['image_base64']) as String?,
+      durationMs:
+          ((json['durationMs'] ?? json['duration_ms']) as num?)?.toInt() ?? 0,
       timestamp: (json['timestamp'] as num?)?.toInt() ??
           DateTime.now().millisecondsSinceEpoch,
       isMe: senderId == myUserId,

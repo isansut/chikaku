@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../services/chikaku_controller.dart';
 import '../theme/app_theme.dart';
@@ -15,11 +14,7 @@ class PairingScreen extends StatefulWidget {
 
 class _PairingScreenState extends State<PairingScreen> {
   final _nameCtrl = TextEditingController();
-  final _joinCodeCtrl = TextEditingController();
-  final _urlCtrl = TextEditingController();
 
-  late String _createdCode;
-  bool _isJoinMode = false; // false = Buat Room, true = Gabung Room
   int _selectedColor = 0xFF5B4CF5;
   bool _isJoining = false;
 
@@ -36,53 +31,20 @@ class _PairingScreenState extends State<PairingScreen> {
   void initState() {
     super.initState();
     _nameCtrl.text = widget.controller.userName;
-    _createdCode = widget.controller.roomCode.isNotEmpty
-        ? widget.controller.roomCode
-        : widget.controller.generateRoomCode();
-    _urlCtrl.text = widget.controller.serverUrl;
     _selectedColor = widget.controller.userColor;
   }
 
   @override
   void dispose() {
     _nameCtrl.dispose();
-    _joinCodeCtrl.dispose();
-    _urlCtrl.dispose();
     super.dispose();
-  }
-
-  Future<void> _pasteRoomCode() async {
-    final clip = await Clipboard.getData('text/plain');
-    final text = (clip?.text ?? '').trim().toUpperCase();
-    if (text.isEmpty) {
-      _showSnack('Clipboard kosong, salin kode dari HP pasanganmu dulu ya');
-      return;
-    }
-    setState(() {
-      _joinCodeCtrl.text = text;
-    });
-    _showSnack('Kode "$text" berhasil ditempel!');
   }
 
   Future<void> _submit() async {
     final name = _nameCtrl.text.trim();
-    final code = _isJoinMode
-        ? _joinCodeCtrl.text.trim().toUpperCase()
-        : _createdCode.trim().toUpperCase();
-    final url = _urlCtrl.text.trim();
 
     if (name.isEmpty) {
       _showSnack('Isi nama panggilan kamu dulu ya');
-      return;
-    }
-    if (code.length < 4) {
-      _showSnack(_isJoinMode
-          ? 'Tempel atau ketik kode room dari pasanganmu (min. 4 karakter)'
-          : 'Kode room minimal 4 karakter');
-      return;
-    }
-    if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
-      _showSnack('URL server harus diawali ws:// atau wss://');
       return;
     }
 
@@ -90,8 +52,7 @@ class _PairingScreenState extends State<PairingScreen> {
     await widget.controller.saveAndJoin(
       name: name,
       color: _selectedColor,
-      code: code,
-      url: url,
+      code: 'GRUP-KITA',
     );
     if (mounted) setState(() => _isJoining = false);
   }
@@ -168,7 +129,7 @@ class _PairingScreenState extends State<PairingScreen> {
                               ),
                             ),
                             Text(
-                              'Live Share 24 Jam • Grup & Berdua',
+                              'Live Share Nonstop • Grup & Berdua',
                               style: TextStyle(
                                 color: Colors.white70,
                                 fontSize: 13,
@@ -270,200 +231,6 @@ class _PairingScreenState extends State<PairingScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-
-              // Room Pairing Card (Clear Buat vs Gabung + Paste)
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: theme.cardTheme.color,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
-                      blurRadius: 16,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text(
-                      '2. Koneksi Grup / Room',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 12),
-                    SegmentedButton<bool>(
-                      segments: const [
-                        ButtonSegment(
-                          value: false,
-                          icon: Icon(Icons.add_circle_outline_rounded),
-                          label: Text('Buat Room'),
-                        ),
-                        ButtonSegment(
-                          value: true,
-                          icon: Icon(Icons.login_rounded),
-                          label: Text('Gabung / Paste'),
-                        ),
-                      ],
-                      selected: {_isJoinMode},
-                      onSelectionChanged: (s) =>
-                          setState(() => _isJoinMode = s.first),
-                    ),
-                    const SizedBox(height: 16),
-                    if (!_isJoinMode) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 14),
-                        decoration: BoxDecoration(
-                          color: AppTheme.primary.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                            color: AppTheme.primary.withValues(alpha: 0.25),
-                          ),
-                        ),
-                        child: Column(
-                          children: [
-                            const Text(
-                              'KODE ROOM KAMU',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.2,
-                                color: AppTheme.primary,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              _createdCode,
-                              style: const TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 6,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                OutlinedButton.icon(
-                                  onPressed: () {
-                                    setState(() {
-                                      _createdCode = widget.controller
-                                          .generateRoomCode();
-                                    });
-                                  },
-                                  icon: const Icon(Icons.refresh_rounded,
-                                      size: 18),
-                                  label: const Text('Acak'),
-                                ),
-                                const SizedBox(width: 10),
-                                FilledButton.icon(
-                                  onPressed: () {
-                                    Clipboard.setData(
-                                        ClipboardData(text: _createdCode));
-                                    _showSnack(
-                                        'Kode "$_createdCode" disalin! Kirim ke pasanganmu.');
-                                  },
-                                  style: FilledButton.styleFrom(
-                                      backgroundColor: AppTheme.primary),
-                                  icon: const Icon(Icons.copy_rounded, size: 18),
-                                  label: const Text('Salin Kode'),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Kirim kode ini ke pasanganmu, lalu pasanganmu pilih tab "Gabung / Paste".',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: theme.textTheme.bodySmall?.color,
-                        ),
-                      ),
-                    ] else ...[
-                      TextField(
-                        controller: _joinCodeCtrl,
-                        textCapitalization: TextCapitalization.characters,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 4,
-                        ),
-                        decoration: const InputDecoration(
-                          hintText: 'KODE ROOM',
-                          prefixIcon: Icon(Icons.vpn_key_outlined),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      FilledButton.tonalIcon(
-                        onPressed: _pasteRoomCode,
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(46),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        icon: const Icon(Icons.content_paste_go_rounded),
-                        label: const Text(
-                          'Tempel Kode dari Clipboard (Paste)',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // Server URL Card
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: theme.cardTheme.color,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
-                      blurRadius: 16,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '3. Server WebSocket',
-                      style:
-                          TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: _urlCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'URL Server',
-                        hintText: 'ws://192.168.1.10:3000',
-                        prefixIcon: Icon(Icons.dns_outlined),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Pastikan kedua HP memakai URL server yang sama (mis. ws://IP_SERVER:3000 atau wss://...).',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: theme.textTheme.bodySmall?.color,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
               const SizedBox(height: 22),
 
               // Submit Button
@@ -488,11 +255,7 @@ class _PairingScreenState extends State<PairingScreen> {
                         )
                       : const Icon(Icons.radar_rounded),
                   label: Text(
-                    _isJoining
-                        ? 'Menghubungkan...'
-                        : (_isJoinMode
-                            ? 'Gabung & Share Live 24 Jam'
-                            : 'Mulai Share Live 24 Jam'),
+                    _isJoining ? 'Menghubungkan...' : 'Gabung & Share Live',
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,

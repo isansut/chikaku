@@ -15,7 +15,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _nameCtrl;
-  late TextEditingController _urlCtrl;
   late TextEditingController _statusTextCtrl;
   late int _interval;
   late String _statusEmoji;
@@ -27,7 +26,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     final c = widget.controller;
     _nameCtrl = TextEditingController(text: c.userName);
-    _urlCtrl = TextEditingController(text: c.serverUrl);
     _statusTextCtrl = TextEditingController(text: c.myStatusText);
     _interval = c.updateIntervalSeconds;
     _statusEmoji = c.myStatusEmoji;
@@ -36,7 +34,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _nameCtrl.dispose();
-    _urlCtrl.dispose();
     _statusTextCtrl.dispose();
     super.dispose();
   }
@@ -44,11 +41,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _save() async {
     await widget.controller.updateSettings(
       name: _nameCtrl.text,
-      url: _urlCtrl.text,
       intervalSeconds: _interval,
       statusEmoji: _statusEmoji,
       statusText: _statusTextCtrl.text.trim().isEmpty
-          ? 'Live 24 Jam'
+          ? 'Live Nonstop'
           : _statusTextCtrl.text.trim(),
     );
     if (mounted) {
@@ -107,9 +103,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             letterSpacing: 2,
                           ),
                         ),
-                        Text(
-                          'Sisa waktu 24 jam: ${c.remainingSessionText}',
-                          style: const TextStyle(
+                        const Text(
+                          'Share Live Nonstop (Tanpa Batas Waktu)',
+                          style: TextStyle(
                               fontSize: 12, color: AppTheme.liveGreen),
                         ),
                       ],
@@ -175,28 +171,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 16),
 
-          // GPS & Connection
+          // GPS Interval
           Card(
             child: Padding(
               padding: const EdgeInsets.all(18),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Koneksi & Akurasi GPS',
+                  const Text('Akurasi & Interval GPS',
                       style:
                           TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _urlCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'WebSocket Server URL',
-                      prefixIcon: Icon(Icons.dns_outlined),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text('Interval Update Lokasi',
-                      style: TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 8),
                   SegmentedButton<int>(
                     segments: const [
                       ButtonSegment(value: 2, label: Text('2 dtk (Akurat)')),
@@ -227,23 +212,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
-            onPressed: () {
-              c.extend24Hours();
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('Durasi Share Live diperpanjang 24 jam!')),
-              );
-            },
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(48),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
-            ),
-            icon: const Icon(Icons.update_rounded),
-            label: const Text('Reset / Perpanjang 24 Jam'),
-          ),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
             onPressed: () => c.sendTestNotification(),
             style: OutlinedButton.styleFrom(
               minimumSize: const Size.fromHeight(48),
@@ -254,54 +222,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             label: const Text('Tes Notifikasi & Suara'),
           ),
           const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: () async {
-              final update = await c.checkForUpdate();
-              if (!context.mounted) return;
-              if (update == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                        'Chikaku v${c.appVersion} (${c.appBuildNumber}) sudah versi terbaru!'),
-                  ),
-                );
-                return;
-              }
-              showDialog(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  title: Text('Update Tersedia v${update['version']}'),
-                  content: Text(
-                    '${update['notes'] ?? 'Versi baru siap diunduh.'}\n\n'
-                    'Setelah download selesai, tinggal tap file chikaku.apk untuk update langsung tanpa hapus aplikasi lama.',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Nanti'),
-                    ),
-                    FilledButton.icon(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        c.openUpdateDownload(update['apkUrl'] as String);
-                      },
-                      icon: const Icon(Icons.download_rounded),
-                      label: const Text('Download & Update'),
-                    ),
-                  ],
-                ),
-              );
-            },
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(48),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
-            ),
-            icon: const Icon(Icons.system_update_rounded),
-            label: Text(
-                'Cek Update Aplikasi (v${c.appVersion} • Build ${c.appBuildNumber})'),
-          ),
-          const SizedBox(height: 12),
           TextButton.icon(
             onPressed: () async {
               await c.leaveRoom();
@@ -309,7 +229,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
             style: TextButton.styleFrom(foregroundColor: AppTheme.partnerCoral),
             icon: const Icon(Icons.logout_rounded),
-            label: const Text('Keluar dari Room'),
+            label: Text('Keluar dari Room (v${c.appVersion})'),
           ),
         ],
       ),

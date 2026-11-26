@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
@@ -41,15 +42,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       duration: const Duration(seconds: 2),
     )..repeat();
 
-    _checkAutoUpdate();
-
     _nudgeSub = widget.controller.nudgeStream.listen((event) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           backgroundColor: AppTheme.primary,
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 120),
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 96),
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           content: Row(
@@ -99,35 +98,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
-  Future<void> _checkAutoUpdate() async {
-    final update = await widget.controller.checkForUpdate();
-    if (update == null || !mounted) return;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Update Tersedia v${update['version']}'),
-        content: Text(
-          '${update['notes'] ?? 'Versi baru siap diunduh.'}\n\n'
-          'Download & install langsung tanpa menghapus aplikasi lama.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Nanti'),
-          ),
-          FilledButton.icon(
-            onPressed: () {
-              Navigator.pop(ctx);
-              widget.controller.openUpdateDownload(update['apkUrl'] as String);
-            },
-            icon: const Icon(Icons.download_rounded),
-            label: const Text('Download & Update'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   void dispose() {
     _nudgeSub?.cancel();
@@ -151,7 +121,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _mapController.fitCamera(
         CameraFit.bounds(
           bounds: bounds,
-          padding: const EdgeInsets.fromLTRB(60, 190, 60, 280),
+          padding: const EdgeInsets.fromLTRB(60, 190, 60, 140),
           maxZoom: 16.5,
         ),
       );
@@ -170,10 +140,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (text.isEmpty) return;
     widget.controller.sendTextMessage(text);
     _chatCtrl.clear();
-    _scrollToBottom();
-  }
-
-  void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_chatScrollCtrl.hasClients) {
         _chatScrollCtrl.animateTo(
@@ -183,6 +149,186 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         );
       }
     });
+  }
+
+  void _openChatModal() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
+          ),
+          child: FractionallySizedBox(
+            heightFactor: 0.82,
+            child: AnimatedBuilder(
+              animation: widget.controller,
+              builder: (_, _) => _ChatModalSheet(
+                controller: widget.controller,
+                chatScrollController: _chatScrollCtrl,
+                chatCtrl: _chatCtrl,
+                onSendChat: _sendChat,
+                onOpenCamera: () => _showCameraOptions(ctx, widget.controller),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showCameraOptions(BuildContext context, ChikakuController c) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Kamera & Minta Foto',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFFE0E7FF),
+                  child: Icon(Icons.camera_front_rounded,
+                      color: AppTheme.primary),
+                ),
+                title: const Text('Kirim Foto (Kamera Depan)'),
+                subtitle: const Text('Ambil selfie dan kirim langsung ke chat'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  c.captureAndSendPhoto(useFrontCamera: true);
+                },
+              ),
+              ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFFE0E7FF),
+                  child: Icon(Icons.camera_rear_rounded,
+                      color: AppTheme.primary),
+                ),
+                title: const Text('Kirim Foto (Kamera Belakang)'),
+                subtitle: const Text('Ambil foto sekitar dan kirim ke chat'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  c.captureAndSendPhoto(useFrontCamera: false);
+                },
+              ),
+              const Divider(),
+              ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFFFFE4E6),
+                  child: Icon(Icons.face_retouching_natural_rounded,
+                      color: AppTheme.partnerCoral),
+                ),
+                title: const Text('Minta Anggota Foto (Kamera Depan)'),
+                subtitle: const Text('Kirim notifikasi ke grup untuk selfie'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  c.requestPartnerPhoto(useFrontCamera: true);
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    const SnackBar(
+                        content: Text(
+                            'Permintaan foto kamera depan dikirim ke grup!')),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Color(0xFFFFE4E6),
+                  child: Icon(Icons.photo_camera_back_rounded,
+                      color: AppTheme.partnerCoral),
+                ),
+                title: const Text('Minta Anggota Foto (Kamera Belakang)'),
+                subtitle:
+                    const Text('Kirim notifikasi ke grup untuk foto sekitar'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  c.requestPartnerPhoto(useFrontCamera: false);
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    const SnackBar(
+                        content: Text(
+                            'Permintaan foto kamera belakang dikirim ke grup!')),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showNudgeMenu(BuildContext context, ChikakuController c) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Kirim Colek / Ping Cepat',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _QuickPingTile(
+                    emoji: '👋',
+                    label: 'Colek!',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      c.sendNudge('👋', 'Colek kamu!');
+                    },
+                  ),
+                  _QuickPingTile(
+                    emoji: '❤️',
+                    label: 'Kangen',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      c.sendNudge('❤️', 'Kangen nih!');
+                    },
+                  ),
+                  _QuickPingTile(
+                    emoji: '🚗',
+                    label: 'Lagi OTW',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      c.sendNudge('🚗', 'Lagi otw nih!');
+                    },
+                  ),
+                  _QuickPingTile(
+                    emoji: '📍',
+                    label: 'Dimana?',
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      c.sendNudge('📍', 'Posisi dimana sekarang?');
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -203,10 +349,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         const tileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
         return Scaffold(
-          resizeToAvoidBottomInset: true,
+          resizeToAvoidBottomInset: false,
           body: Stack(
             children: [
-              // 1. Live OpenStreetMap
+              // 1. Full-Screen Live OpenStreetMap
               FlutterMap(
                 mapController: _mapController,
                 options: MapOptions(
@@ -249,7 +395,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             Polyline(
                               points: entry.value,
                               strokeWidth: 4,
-                              color: Color(c.members[entry.key]?.color ?? 0xFFFF5A79)
+                              color: Color(
+                                      c.members[entry.key]?.color ?? 0xFFFF5A79)
                                   .withValues(alpha: 0.55),
                             ),
                       ],
@@ -270,7 +417,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       if (c.myLocation != null)
                         Marker(
                           point: c.myLocation!.latLng,
-                          width: 110,
+                          width: 115,
                           height: 92,
                           child: _UserPin(
                             name: '${c.userName} (Kamu)',
@@ -297,7 +444,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 battery: m.location!.battery,
                                 emoji: m.location!.statusEmoji,
                                 pulse: _pulseCtrl,
-                                isPartner: true,
                               ),
                             ),
                           ),
@@ -306,7 +452,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ],
               ),
 
-              // 2. Top Floating Distance & Status Card
+              // 2. Top Floating Status & Distance Card
               SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
@@ -335,12 +481,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               // 3. Right Floating Map Controls
               Positioned(
                 right: 14,
-                top: MediaQuery.of(context).padding.top + 165,
+                bottom: 108,
                 child: Column(
                   children: [
                     _MapActionButton(
                       icon: Icons.fit_screen_rounded,
-                      tooltip: 'Lihat Berdua',
+                      tooltip: 'Lihat Semua',
                       onTap: _fitBoth,
                     ),
                     const SizedBox(height: 8),
@@ -358,28 +504,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                     const SizedBox(height: 8),
                     _MapActionButton(
-                      icon: Icons.directions_rounded,
-                      iconColor: AppTheme.liveGreen,
-                      tooltip: 'Buka Rute di Google Maps',
-                      onTap: () async {
-                        final ok = await c.openPartnerInGoogleMaps();
-                        if (!ok && context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                  'Lokasi pasangan belum tersedia untuk navigasi'),
-                            ),
-                          );
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 8),
-                    _MapActionButton(
                       icon: Icons.route_rounded,
                       iconColor: c.showTrail ? AppTheme.primary : null,
-                      tooltip: c.showTrail
-                          ? 'Sembunyikan Jejak Rute'
-                          : 'Tampilkan Jejak Rute',
+                      tooltip: 'Jejak Rute',
                       onTap: c.toggleTrail,
                     ),
                     const SizedBox(height: 8),
@@ -387,34 +514,220 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       icon: _darkMap
                           ? Icons.light_mode_rounded
                           : Icons.dark_mode_rounded,
-                      tooltip: 'Ganti Tema Peta',
+                      tooltip: 'Tema Peta',
                       onTap: () => setState(() => _darkMap = !_darkMap),
                     ),
                   ],
                 ),
               ),
 
-              // 4. Draggable Bottom Sheet (Chat, Voice Note & Quick Actions)
-              DraggableScrollableSheet(
-                initialChildSize: 0.36,
-                minChildSize: 0.14,
-                maxChildSize: 0.85,
-                snap: true,
-                snapSizes: const [0.14, 0.36, 0.78],
-                builder: (context, scrollController) {
-                  return _ChatBottomSheet(
-                    controller: c,
-                    sheetScrollController: scrollController,
-                    chatScrollController: _chatScrollCtrl,
-                    chatCtrl: _chatCtrl,
-                    onSendChat: _sendChat,
-                  );
-                },
+              // 4. Floating Bottom Taskbar (Dock)
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: MediaQuery.of(context).padding.bottom + 14,
+                child: _FloatingTaskbar(
+                  messageCount: c.messages.length,
+                  onChatTap: _openChatModal,
+                  onCameraTap: () => _showCameraOptions(context, c),
+                  onNudgeTap: () => _showNudgeMenu(context, c),
+                  onMapsTap: () async {
+                    final ok = await c.openPartnerInGoogleMaps();
+                    if (!ok && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                              'Lokasi anggota belum tersedia untuk navigasi'),
+                        ),
+                      );
+                    }
+                  },
+                ),
               ),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+class _FloatingTaskbar extends StatelessWidget {
+  final int messageCount;
+  final VoidCallback onChatTap;
+  final VoidCallback onCameraTap;
+  final VoidCallback onNudgeTap;
+  final VoidCallback onMapsTap;
+
+  const _FloatingTaskbar({
+    required this.messageCount,
+    required this.onChatTap,
+    required this.onCameraTap,
+    required this.onNudgeTap,
+    required this.onMapsTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: (isDark ? AppTheme.surfaceDark : Colors.white)
+            .withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.16),
+            blurRadius: 22,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _TaskbarItem(
+            icon: Icons.chat_bubble_rounded,
+            label: 'Chat',
+            color: AppTheme.primary,
+            badge: messageCount > 0 ? '$messageCount' : null,
+            highlighted: true,
+            onTap: onChatTap,
+          ),
+          _TaskbarItem(
+            icon: Icons.camera_alt_rounded,
+            label: 'Kamera',
+            color: const Color(0xFF0EA5E9),
+            onTap: onCameraTap,
+          ),
+          _TaskbarItem(
+            icon: Icons.waving_hand_rounded,
+            label: 'Colek',
+            color: AppTheme.partnerCoral,
+            onTap: onNudgeTap,
+          ),
+          _TaskbarItem(
+            icon: Icons.directions_rounded,
+            label: 'Rute',
+            color: AppTheme.liveGreen,
+            onTap: onMapsTap,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TaskbarItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final String? badge;
+  final bool highlighted;
+  final VoidCallback onTap;
+
+  const _TaskbarItem({
+    required this.icon,
+    required this.label,
+    required this.color,
+    this.badge,
+    this.highlighted = false,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: highlighted
+              ? color.withValues(alpha: 0.13)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(icon, color: color, size: 22),
+                if (badge != null)
+                  Positioned(
+                    top: -6,
+                    right: -8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: AppTheme.partnerCoral,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        badge!,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: highlighted ? color : null,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickPingTile extends StatelessWidget {
+  final String emoji;
+  final String label;
+  final VoidCallback onTap;
+
+  const _QuickPingTile({
+    required this.emoji,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppTheme.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 20)),
+            const SizedBox(width: 8),
+            Text(label,
+                style:
+                    const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -425,7 +738,6 @@ class _UserPin extends StatelessWidget {
   final int battery;
   final String emoji;
   final AnimationController pulse;
-  final bool isPartner;
 
   const _UserPin({
     required this.name,
@@ -433,7 +745,6 @@ class _UserPin extends StatelessWidget {
     required this.battery,
     required this.emoji,
     required this.pulse,
-    this.isPartner = false,
   });
 
   @override
@@ -571,7 +882,7 @@ class _TopStatusCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: (isDark ? AppTheme.surfaceDark : Colors.white)
             .withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.12),
@@ -583,75 +894,79 @@ class _TopStatusCard extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Top row: Brand + 24h Timer + Connection + Settings
           Row(
             children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: AppTheme.primary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: c.isConnected
-                            ? AppTheme.liveGreen
-                            : AppTheme.warningAmber,
-                      ),
+              InkWell(
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: c.roomCode));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Kode room "${c.roomCode}" disalin!'),
+                      behavior: SnackBarBehavior.floating,
                     ),
-                    const SizedBox(width: 6),
-                    Text(
-                      c.isConnected
-                          ? 'LIVE • ${c.roomCode}'
-                          : 'OFFLINE • ${c.roomCode}',
-                      style: const TextStyle(
-                        color: AppTheme.primary,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 12,
+                  );
+                },
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: c.isConnected
+                              ? AppTheme.liveGreen
+                              : AppTheme.warningAmber,
+                        ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 6),
+                      Text(
+                        c.isConnected
+                            ? 'LIVE • ${c.roomCode}'
+                            : 'SYNC • ${c.roomCode}',
+                        style: const TextStyle(
+                          color: AppTheme.primary,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.copy_rounded,
+                          size: 12, color: AppTheme.primary),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                 decoration: BoxDecoration(
                   color: AppTheme.liveGreen.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.timer_outlined,
-                        size: 13, color: AppTheme.liveGreen),
-                    const SizedBox(width: 4),
-                    Text(
-                      c.remainingSessionText,
-                      style: const TextStyle(
-                        color: AppTheme.liveGreen,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 11.5,
-                      ),
-                    ),
-                  ],
+                child: const Text(
+                  'NONSTOP',
+                  style: TextStyle(
+                    color: AppTheme.liveGreen,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 10.5,
+                  ),
                 ),
               ),
               const Spacer(),
               IconButton(
                 onPressed: c.togglePauseSharing,
                 visualDensity: VisualDensity.compact,
-                tooltip: c.isSharingPaused
-                    ? 'Lanjutkan Share Lokasi'
-                    : 'Jeda Share Lokasi',
+                tooltip: c.isSharingPaused ? 'Lanjutkan GPS' : 'Jeda GPS',
                 icon: Icon(
                   c.isSharingPaused
                       ? Icons.play_circle_fill_rounded
@@ -675,8 +990,6 @@ class _TopStatusCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-
-          // Distance & Partner Row
           Row(
             children: [
               Container(
@@ -706,7 +1019,7 @@ class _TopStatusCard extends StatelessWidget {
                     Row(
                       children: [
                         Text(
-                          p?.name ?? 'Menunggu pasangan...',
+                          p?.name ?? 'Menunggu anggota...',
                           style: const TextStyle(
                             fontWeight: FontWeight.w700,
                             fontSize: 14.5,
@@ -729,7 +1042,7 @@ class _TopStatusCard extends StatelessWidget {
                       p?.location != null
                           ? '${p!.location!.statusEmoji} ${p.location!.statusText} • ${c.formattedEta}'
                           : (c.connectionError ??
-                              'Bagikan kode ${c.roomCode} ke pasanganmu'),
+                              'Bagikan kode ${c.roomCode} ke teman/pasangan'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -834,19 +1147,19 @@ class _MapActionButton extends StatelessWidget {
   }
 }
 
-class _ChatBottomSheet extends StatelessWidget {
+class _ChatModalSheet extends StatelessWidget {
   final ChikakuController controller;
-  final ScrollController sheetScrollController;
   final ScrollController chatScrollController;
   final TextEditingController chatCtrl;
   final VoidCallback onSendChat;
+  final VoidCallback onOpenCamera;
 
-  const _ChatBottomSheet({
+  const _ChatModalSheet({
     required this.controller,
-    required this.sheetScrollController,
     required this.chatScrollController,
     required this.chatCtrl,
     required this.onSendChat,
+    required this.onOpenCamera,
   });
 
   static const List<String> _quickReplies = [
@@ -868,78 +1181,59 @@ class _ChatBottomSheet extends StatelessWidget {
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.14),
-            blurRadius: 20,
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 24,
             offset: const Offset(0, -4),
           ),
         ],
       ),
       child: Column(
         children: [
-          // Drag handle & Nudge Bar (inside scrollable header so dragging works smoothly)
-          SingleChildScrollView(
-            controller: sheetScrollController,
-            child: Column(
+          const SizedBox(height: 10),
+          Container(
+            width: 42,
+            height: 5,
+            decoration: BoxDecoration(
+              color: Colors.grey.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+            child: Row(
               children: [
-                const SizedBox(height: 10),
+                const Text(
+                  'Obrolan Grup & Voice Note',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(width: 8),
                 Container(
-                  width: 42,
-                  height: 5,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: Colors.grey.withValues(alpha: 0.35),
+                    color: AppTheme.primary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                ),
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                  child: Row(
-                    children: [
-                      const Text(
-                        'Chat & Voice Note',
-                        style: TextStyle(
-                          fontSize: 15.5,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppTheme.primary.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          '${c.messages.length}',
-                          style: const TextStyle(
-                            color: AppTheme.primary,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      const Spacer(),
-                      _NudgeChip(
-                        emoji: '👋',
-                        label: 'Colek',
-                        onTap: () => c.sendNudge('👋', 'Colek kamu!'),
-                      ),
-                      const SizedBox(width: 6),
-                      _NudgeChip(
-                        emoji: '❤️',
-                        label: 'Kangen',
-                        onTap: () => c.sendNudge('❤️', 'Kangen nih!'),
-                      ),
-                    ],
+                  child: Text(
+                    '${c.messages.length}',
+                    style: const TextStyle(
+                      color: AppTheme.primary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
+                ),
+                const Spacer(),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close_rounded),
                 ),
               ],
             ),
           ),
           const Divider(height: 1),
 
-          // Messages List (always opens at newest message + floating scroll-to-bottom button)
+          // Messages List (always opens at newest message + floating scroll button)
           Expanded(
             child: c.messages.isEmpty
                 ? Center(
@@ -1043,7 +1337,7 @@ class _ChatBottomSheet extends StatelessWidget {
           ),
           const SizedBox(height: 8),
 
-          // Input Bar (Chat + Voice Note Recorder)
+          // Input Bar
           SafeArea(
             top: false,
             child: Padding(
@@ -1069,7 +1363,7 @@ class _ChatBottomSheet extends StatelessWidget {
                         ),
                         const SizedBox(width: 6),
                         IconButton.filledTonal(
-                          onPressed: () => _showCameraOptions(context, c),
+                          onPressed: onOpenCamera,
                           icon: const Icon(Icons.camera_alt_rounded),
                           tooltip: 'Kamera / Minta Foto',
                         ),
@@ -1108,137 +1402,6 @@ class _ChatBottomSheet extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  void _showCameraOptions(BuildContext context, ChikakuController c) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Kamera & Minta Foto',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 12),
-              ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Color(0xFFE0E7FF),
-                  child: Icon(Icons.camera_front_rounded,
-                      color: AppTheme.primary),
-                ),
-                title: const Text('Kirim Foto (Kamera Depan)'),
-                subtitle: const Text('Ambil selfie dan kirim langsung ke chat'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  c.captureAndSendPhoto(useFrontCamera: true);
-                },
-              ),
-              ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Color(0xFFE0E7FF),
-                  child: Icon(Icons.camera_rear_rounded,
-                      color: AppTheme.primary),
-                ),
-                title: const Text('Kirim Foto (Kamera Belakang)'),
-                subtitle: const Text('Ambil foto sekitar dan kirim ke chat'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  c.captureAndSendPhoto(useFrontCamera: false);
-                },
-              ),
-              const Divider(),
-              ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Color(0xFFFFE4E6),
-                  child: Icon(Icons.face_retouching_natural_rounded,
-                      color: AppTheme.partnerCoral),
-                ),
-                title: const Text('Minta Pasangan Foto (Kamera Depan)'),
-                subtitle: const Text('Kirim notifikasi ke pasangan untuk selfie'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  c.requestPartnerPhoto(useFrontCamera: true);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text(
-                            'Permintaan foto kamera depan dikirim ke pasangan!')),
-                  );
-                },
-              ),
-              ListTile(
-                leading: const CircleAvatar(
-                  backgroundColor: Color(0xFFFFE4E6),
-                  child: Icon(Icons.photo_camera_back_rounded,
-                      color: AppTheme.partnerCoral),
-                ),
-                title: const Text('Minta Pasangan Foto (Kamera Belakang)'),
-                subtitle: const Text(
-                    'Kirim notifikasi ke pasangan untuk foto sekitar'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  c.requestPartnerPhoto(useFrontCamera: false);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text(
-                            'Permintaan foto kamera belakang dikirim ke pasangan!')),
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _NudgeChip extends StatelessWidget {
-  final String emoji;
-  final String label;
-  final VoidCallback onTap;
-
-  const _NudgeChip({
-    required this.emoji,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: AppTheme.partnerCoral.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(emoji, style: const TextStyle(fontSize: 13)),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: const TextStyle(
-                color: AppTheme.partnerCoral,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1322,7 +1485,7 @@ class _MessageBubble extends StatelessWidget {
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.74,
+          maxWidth: MediaQuery.of(context).size.width * 0.76,
         ),
         decoration: BoxDecoration(
           color: bgColor,

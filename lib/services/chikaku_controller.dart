@@ -10,7 +10,6 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'
     as fln;
 import 'package:geolocator/geolocator.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -19,10 +18,10 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/chikaku_models.dart';
 import 'background_service.dart';
+import 'supabase_room_client.dart';
 
 class ChikakuController extends ChangeNotifier {
   static const String _prefUserId = 'chikaku_user_id';
@@ -30,7 +29,6 @@ class ChikakuController extends ChangeNotifier {
   static const String _prefColor = 'chikaku_color';
   static const String _prefBio = 'chikaku_bio';
   static const String _prefRoomCode = 'chikaku_room_code';
-  static const String _prefServerUrl = 'chikaku_server_url';
   static const String _prefInterval = 'chikaku_interval_sec';
 
   // Identity & Settings
@@ -39,7 +37,6 @@ class ChikakuController extends ChangeNotifier {
   int userColor = 0xFF5B4CF5;
   String userBio = '';
   String roomCode = '';
-  String serverUrl = 'wss://chikaku-server.fly.dev';
   int updateIntervalSeconds = 5;
   String myStatusEmoji = '📍';
   String myStatusText = 'Live 24 Jam';
@@ -53,8 +50,8 @@ class ChikakuController extends ChangeNotifier {
   String? connectionError;
   int sessionExpiresAt = 0;
 
-  String appVersion = '1.1.5';
-  int appBuildNumber = 11;
+  String appVersion = '2.0.0';
+  int appBuildNumber = 12;
 
   UserLocation? myLocation;
   final Map<String, RoomMember> members = {};
@@ -105,12 +102,10 @@ class ChikakuController extends ChangeNotifier {
 
   Timer? _countdownTimer;
 
-  // Direct iOS/non-Android transport & GPS
-  WebSocketChannel? _directChannel;
-  StreamSubscription? _directWsSub;
+  // Direct iOS / non-Android Supabase & GPS
+  final SupabaseRoomClient _directSupabase = SupabaseRoomClient();
   StreamSubscription<Position>? _directPosSub;
   Timer? _directReconnectTimer;
-  Timer? _directHeartbeatTimer;
   final Battery _battery = Battery();
   int _cachedBattery = 100;
   final fln.FlutterLocalNotificationsPlugin _iosNotif =
@@ -150,7 +145,7 @@ class ChikakuController extends ChangeNotifier {
     try {
       final pkg = await PackageInfo.fromPlatform();
       appVersion = pkg.version;
-      appBuildNumber = int.tryParse(pkg.buildNumber) ?? 9;
+      appBuildNumber = int.tryParse(pkg.buildNumber) ?? 12;
     } catch (_) {}
 
     final prefs = await SharedPreferences.getInstance();
@@ -161,8 +156,6 @@ class ChikakuController extends ChangeNotifier {
     userColor = prefs.getInt(_prefColor) ?? 0xFF5B4CF5;
     userBio = prefs.getString(_prefBio) ?? '';
     roomCode = prefs.getString(_prefRoomCode) ?? '';
-    serverUrl =
-        prefs.getString(_prefServerUrl) ?? 'wss://chikaku-server.fly.dev';
     updateIntervalSeconds = prefs.getInt(_prefInterval) ?? 5;
 
     isPaired = userName.isNotEmpty && roomCode.isNotEmpty;
@@ -213,19 +206,16 @@ class ChikakuController extends ChangeNotifier {
     required String name,
     required int color,
     required String code,
-    required String url,
   }) async {
     userName = name.trim();
     userColor = color;
     roomCode = code.trim().toUpperCase();
-    serverUrl = url.trim();
     isPaired = true;
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefName, userName);
     await prefs.setInt(_prefColor, userColor);
     await prefs.setString(_prefRoomCode, roomCode);
-    await prefs.setString(_prefServerUrl, serverUrl);
 
     messages.clear();
     myTrail.clear();
@@ -265,13 +255,12 @@ class ChikakuController extends ChangeNotifier {
       });
       FlutterForegroundTask.sendDataToTask({'cmd': 'reload_prefs'});
     } else {
-      _connectDirectWs();
+      await _connectDirectSupabase();
     }
   }
 
   Future<void> updateSettings({
     String? name,
-    String? url,
     int? intervalSeconds,
     String? statusEmoji,
     String? statusText,
@@ -282,11 +271,6 @@ class ChikakuController extends ChangeNotifier {
     if (name != null && name.trim().isNotEmpty) {
       userName = name.trim();
       await prefs.setString(_prefName, userName);
-      needReload = true;
-    }
-    if (url != null && url.trim().isNotEmpty && url.trim() != serverUrl) {
-      serverUrl = url.trim();
-      await prefs.setString(_prefServerUrl, serverUrl);
       needReload = true;
     }
     if (intervalSeconds != null && intervalSeconds != updateIntervalSeconds) {
@@ -309,9 +293,9 @@ class ChikakuController extends ChangeNotifier {
       }
     } else {
       if (needReload) {
-        await _connectDirectWs();
+        await _connectDirectSupabase();
       } else {
-        _sendDirectCurrentLocation();
+        await _sendDirectCurrentLocation();
       }
     }
   }
@@ -344,15 +328,15 @@ class ChikakuController extends ChangeNotifier {
         );
       }
     } else {
-      // iOS / non-Android: run native Geolocator + WebSocket directly
       await _startDirectLocationTracking();
-      await _connectDirectWs();
+      await _connectDirectSupabase();
     }
   }
 
   Future<void> _requestPermissions() async {
     await [
       Permission.location,
+      Permission.camera,
       Permission.microphone,
       Permission.notification,
     ].request();
@@ -371,6 +355,49 @@ class ChikakuController extends ChangeNotifier {
           Map<String, dynamic>.from(data['location'] as Map));
       _appendTrailPoint(myTrail, myLocation!.latLng);
       notifyListeners();
+    } else if (event == 'joined_data') {
+      isConnected = true;
+      connectionError = null;
+      if (data['expiresAt'] != null) {
+        sessionExpiresAt = (data['expiresAt'] as num).toInt();
+      }
+      if (data['members'] is List) {
+        members.clear();
+        for (final item in data['members'] as List) {
+          final m = RoomMember.fromJson(Map<String, dynamic>.from(item as Map));
+          members[m.userId] = m;
+          if (m.location != null) {
+            final trail = memberTrails.putIfAbsent(m.userId, () => []);
+            _appendTrailPoint(trail, m.location!.latLng);
+          }
+        }
+      }
+      if (data['history'] is List) {
+        messages.clear();
+        for (final item in data['history'] as List) {
+          messages.add(ChatMessage.fromJson(
+              Map<String, dynamic>.from(item as Map), userId));
+        }
+      }
+      notifyListeners();
+    } else if (event == 'member_update' && data['member'] is Map) {
+      final m = RoomMember.fromJson(
+          Map<String, dynamic>.from(data['member'] as Map));
+      members[m.userId] = m;
+      if (m.location != null) {
+        final trail = memberTrails.putIfAbsent(m.userId, () => []);
+        _appendTrailPoint(trail, m.location!.latLng);
+      }
+      notifyListeners();
+    } else if (event == 'message_insert' && data['message'] is Map) {
+      final msg = ChatMessage.fromJson(
+          Map<String, dynamic>.from(data['message'] as Map), userId);
+      if (!messages.any((m) => m.id == msg.id)) {
+        messages.add(msg);
+        notifyListeners();
+      }
+    } else if (event == 'event_insert' && data['data'] is Map) {
+      _handleEventRow(Map<String, dynamic>.from(data['data'] as Map));
     } else if (event == 'sync_reply') {
       isConnected = data['connected'] as bool? ?? false;
       if (data['expiresAt'] != null && (data['expiresAt'] as num) > 0) {
@@ -388,8 +415,28 @@ class ChikakuController extends ChangeNotifier {
         }
       }
       notifyListeners();
-    } else if (event == 'ws_message' && data['data'] is Map) {
-      _handleWsMessage(Map<String, dynamic>.from(data['data'] as Map));
+    }
+  }
+
+  void _handleEventRow(Map<String, dynamic> ev) {
+    final type = ev['type'] as String?;
+    final sender =
+        (ev['sender_name'] ?? ev['senderName']) as String? ?? 'Pasangan';
+    if (type == 'nudge') {
+      _nudgeController.add(NudgeEvent(
+        senderName: sender,
+        emoji: ev['emoji'] as String? ?? '👋',
+        label: ev['label'] as String? ?? 'Colek kamu!',
+        timestamp: (ev['timestamp'] as num?)?.toInt() ??
+            DateTime.now().millisecondsSinceEpoch,
+      ));
+    } else if (type == 'photo_request') {
+      _photoReqController.add(PhotoRequestEvent(
+        senderName: sender,
+        useFrontCamera: ev['camera'] == 'front',
+        timestamp: (ev['timestamp'] as num?)?.toInt() ??
+            DateTime.now().millisecondsSinceEpoch,
+      ));
     }
   }
 
@@ -413,111 +460,6 @@ class ChikakuController extends ChangeNotifier {
     }
   }
 
-  void _handleWsMessage(Map<String, dynamic> data) {
-    final type = data['type'] as String?;
-
-    if (type == 'error') {
-      connectionError = data['message'] as String? ?? 'Terjadi kesalahan';
-      notifyListeners();
-    } else if (type == 'joined') {
-      isConnected = true;
-      connectionError = null;
-      if (data['expiresAt'] != null) {
-        sessionExpiresAt = (data['expiresAt'] as num).toInt();
-      }
-      if (data['members'] is List) {
-        members.clear();
-        for (final item in data['members'] as List) {
-          final m = RoomMember.fromJson(Map<String, dynamic>.from(item as Map));
-          members[m.userId] = m;
-          if (m.location != null) {
-            final trail = memberTrails.putIfAbsent(m.userId, () => []);
-            _appendTrailPoint(trail, m.location!.latLng);
-          }
-        }
-      } else if (data['partner'] is Map) {
-        members.clear();
-        final m = RoomMember.fromJson(
-            Map<String, dynamic>.from(data['partner'] as Map));
-        members[m.userId] = m;
-        if (m.location != null) {
-          final trail = memberTrails.putIfAbsent(m.userId, () => []);
-          _appendTrailPoint(trail, m.location!.latLng);
-        }
-      }
-      if (data['history'] is List) {
-        messages.clear();
-        for (final item in data['history'] as List) {
-          messages.add(ChatMessage.fromJson(
-              Map<String, dynamic>.from(item as Map), userId));
-        }
-      }
-      notifyListeners();
-    } else if (type == 'member_status' || type == 'partner_status') {
-      final rawMember = data['member'] ?? data['partner'];
-      if (rawMember != null) {
-        final m = RoomMember.fromJson(
-            Map<String, dynamic>.from(rawMember as Map));
-        members[m.userId] = m;
-        notifyListeners();
-      }
-    } else if (type == 'member_location' || type == 'partner_location') {
-      final uid = data['userId'] as String? ?? 'member';
-      final loc = UserLocation.fromJson(
-          Map<String, dynamic>.from(data['location'] as Map));
-      members[uid] = RoomMember(
-        userId: uid,
-        name: data['name'] as String? ?? members[uid]?.name ?? 'Anggota',
-        color: (data['color'] as num?)?.toInt() ?? 0xFFFF5A79,
-        bio: data['bio'] as String? ?? members[uid]?.bio ?? '',
-        online: true,
-        lastSeen: DateTime.now().millisecondsSinceEpoch,
-        location: loc,
-      );
-      final trail = memberTrails.putIfAbsent(uid, () => []);
-      _appendTrailPoint(trail, loc.latLng);
-      notifyListeners();
-    } else if (type == 'message') {
-      final msg = ChatMessage.fromJson(
-          Map<String, dynamic>.from(data['message'] as Map), userId);
-      if (!messages.any((m) => m.id == msg.id)) {
-        messages.add(msg);
-        notifyListeners();
-      }
-    } else if (type == 'nudge') {
-      _nudgeController.add(NudgeEvent(
-        senderName: data['senderName'] as String? ?? 'Pasangan',
-        emoji: data['emoji'] as String? ?? '👋',
-        label: data['label'] as String? ?? 'Colek kamu!',
-        timestamp: (data['timestamp'] as num?)?.toInt() ??
-            DateTime.now().millisecondsSinceEpoch,
-      ));
-    } else if (type == 'photo_request') {
-      _photoReqController.add(PhotoRequestEvent(
-        senderName: data['senderName'] as String? ?? 'Pasangan',
-        useFrontCamera: data['camera'] == 'front',
-        timestamp: (data['timestamp'] as num?)?.toInt() ??
-            DateTime.now().millisecondsSinceEpoch,
-      ));
-    } else if (type == 'session_extended') {
-      sessionExpiresAt = (data['expiresAt'] as num).toInt();
-      notifyListeners();
-    }
-  }
-
-  void _sendWs(Map<String, dynamic> payload) {
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      FlutterForegroundTask.sendDataToTask({
-        'cmd': 'send_ws',
-        'payload': payload,
-      });
-    } else {
-      try {
-        _directChannel?.sink.add(jsonEncode(payload));
-      } catch (_) {}
-    }
-  }
-
   void togglePauseSharing() {
     isSharingPaused = !isSharingPaused;
     if (defaultTargetPlatform == TargetPlatform.android) {
@@ -531,8 +473,8 @@ class ChikakuController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- Chat & Voice Notes ---
-  void sendTextMessage(String text) {
+  // --- Chat, Voice Notes & Camera ---
+  Future<void> sendTextMessage(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
 
@@ -541,6 +483,7 @@ class ChikakuController extends ChangeNotifier {
       type: ChatMessageType.chat,
       senderId: userId,
       senderName: userName,
+      senderColor: userColor,
       text: trimmed,
       timestamp: DateTime.now().millisecondsSinceEpoch,
       isMe: true,
@@ -548,20 +491,50 @@ class ChikakuController extends ChangeNotifier {
     messages.add(msg);
     notifyListeners();
 
-    _sendWs({
-      'type': 'chat',
-      'id': msg.id,
-      'text': msg.text,
-      'timestamp': msg.timestamp,
-    });
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'send_message',
+        'payload': {
+          'id': msg.id,
+          'type': 'chat',
+          'text': msg.text,
+          'timestamp': msg.timestamp,
+        },
+      });
+    } else {
+      try {
+        await _directSupabase.sendMessage(
+          id: msg.id,
+          type: 'chat',
+          senderName: userName,
+          senderColor: userColor,
+          text: msg.text,
+          timestamp: msg.timestamp,
+        );
+      } catch (_) {}
+    }
   }
 
-  void sendNudge(String emoji, String label) {
-    _sendWs({
-      'type': 'nudge',
-      'emoji': emoji,
-      'label': label,
-    });
+  Future<void> sendNudge(String emoji, String label) async {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'send_event',
+        'payload': {
+          'type': 'nudge',
+          'emoji': emoji,
+          'label': label,
+        },
+      });
+    } else {
+      try {
+        await _directSupabase.sendEvent(
+          type: 'nudge',
+          senderName: userName,
+          emoji: emoji,
+          label: label,
+        );
+      } catch (_) {}
+    }
   }
 
   void sendTestNotification({bool colek = false}) {
@@ -578,11 +551,25 @@ class ChikakuController extends ChangeNotifier {
     }
   }
 
-  void requestPartnerPhoto({required bool useFrontCamera}) {
-    _sendWs({
-      'type': 'photo_request',
-      'camera': useFrontCamera ? 'front' : 'rear',
-    });
+  Future<void> requestPartnerPhoto({required bool useFrontCamera}) async {
+    final cam = useFrontCamera ? 'front' : 'rear';
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'send_event',
+        'payload': {
+          'type': 'photo_request',
+          'camera': cam,
+        },
+      });
+    } else {
+      try {
+        await _directSupabase.sendEvent(
+          type: 'photo_request',
+          senderName: userName,
+          camera: cam,
+        );
+      } catch (_) {}
+    }
   }
 
   Future<bool> captureAndSendPhoto({required bool useFrontCamera}) async {
@@ -602,6 +589,7 @@ class ChikakuController extends ChangeNotifier {
         type: ChatMessageType.image,
         senderId: userId,
         senderName: userName,
+        senderColor: userColor,
         imageBase64: b64,
         timestamp: DateTime.now().millisecondsSinceEpoch,
         isMe: true,
@@ -609,23 +597,44 @@ class ChikakuController extends ChangeNotifier {
       messages.add(msg);
       notifyListeners();
 
-      _sendWs({
-        'type': 'image',
-        'id': msg.id,
-        'imageBase64': b64,
-        'timestamp': msg.timestamp,
-      });
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        FlutterForegroundTask.sendDataToTask({
+          'cmd': 'send_message',
+          'payload': {
+            'id': msg.id,
+            'type': 'image',
+            'imageBase64': b64,
+            'timestamp': msg.timestamp,
+          },
+        });
+      } else {
+        await _directSupabase.sendMessage(
+          id: msg.id,
+          type: 'image',
+          senderName: userName,
+          senderColor: userColor,
+          imageBase64: b64,
+          timestamp: msg.timestamp,
+        );
+      }
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  void extend24Hours() {
+  Future<void> extend24Hours() async {
     sessionExpiresAt =
         DateTime.now().add(const Duration(hours: 24)).millisecondsSinceEpoch;
     notifyListeners();
-    _sendWs({'type': 'extend_session', 'hours': 24});
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({'cmd': 'extend_session'});
+    } else {
+      try {
+        sessionExpiresAt = await _directSupabase.extendSession();
+        notifyListeners();
+      } catch (_) {}
+    }
   }
 
   Future<bool> openPartnerInGoogleMaps() async {
@@ -637,29 +646,8 @@ class ChikakuController extends ChangeNotifier {
     return launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
-  /// Checks `{http/https}://<server>/version.json` for a newer APK build.
-  Future<Map<String, dynamic>?> checkForUpdate() async {
-    try {
-      final wsUri = Uri.parse(serverUrl);
-      final scheme = wsUri.scheme == 'wss' ? 'https' : 'http';
-      final versionUri = wsUri.replace(
-        scheme: scheme,
-        path: '/version.json',
-        query: null,
-      );
-      final res =
-          await http.get(versionUri).timeout(const Duration(seconds: 6));
-      if (res.statusCode != 200) return null;
-      final data = jsonDecode(res.body) as Map<String, dynamic>;
-      final remoteBuild = (data['buildNumber'] as num?)?.toInt() ?? 0;
-      if (remoteBuild > appBuildNumber) {
-        return data;
-      }
-      return null;
-    } catch (_) {
-      return null;
-    }
-  }
+  /// Note: OTA APK self-update disabled when serverless; returns null cleanly.
+  Future<Map<String, dynamic>?> checkForUpdate() async => null;
 
   Future<bool> openUpdateDownload(String apkUrl) async {
     final uri = Uri.parse(apkUrl);
@@ -728,6 +716,7 @@ class ChikakuController extends ChangeNotifier {
       type: ChatMessageType.voiceNote,
       senderId: userId,
       senderName: userName,
+      senderColor: userColor,
       audioBase64: b64,
       localAudioPath: path,
       durationMs: durationMs,
@@ -737,13 +726,30 @@ class ChikakuController extends ChangeNotifier {
     messages.add(msg);
     notifyListeners();
 
-    _sendWs({
-      'type': 'voice_note',
-      'id': msg.id,
-      'audioBase64': b64,
-      'durationMs': durationMs,
-      'timestamp': msg.timestamp,
-    });
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'send_message',
+        'payload': {
+          'id': msg.id,
+          'type': 'voice_note',
+          'audioBase64': b64,
+          'durationMs': durationMs,
+          'timestamp': msg.timestamp,
+        },
+      });
+    } else {
+      try {
+        await _directSupabase.sendMessage(
+          id: msg.id,
+          type: 'voice_note',
+          senderName: userName,
+          senderColor: userColor,
+          audioBase64: b64,
+          durationMs: durationMs,
+          timestamp: msg.timestamp,
+        );
+      } catch (_) {}
+    }
   }
 
   Future<void> togglePlayVoiceNote(ChatMessage msg) async {
@@ -837,7 +843,9 @@ class ChikakuController extends ChangeNotifier {
     if (defaultTargetPlatform == TargetPlatform.android) {
       await FlutterForegroundTask.stopService();
     } else {
-      await _disconnectDirectWs();
+      _directReconnectTimer?.cancel();
+      await _directSupabase.setOffline();
+      await _directSupabase.disconnect();
       await _directPosSub?.cancel();
     }
     _countdownTimer?.cancel();
@@ -860,7 +868,8 @@ class ChikakuController extends ChangeNotifier {
     if (defaultTargetPlatform == TargetPlatform.android) {
       FlutterForegroundTask.removeTaskDataCallback(_onBackgroundData);
     }
-    _disconnectDirectWs();
+    _directReconnectTimer?.cancel();
+    _directSupabase.dispose();
     _directPosSub?.cancel();
     _countdownTimer?.cancel();
     _recordingTimer?.cancel();
@@ -871,7 +880,7 @@ class ChikakuController extends ChangeNotifier {
     super.dispose();
   }
 
-  // --- Direct iOS / non-Android GPS, WebSocket & Local Notifications ---
+  // --- Direct iOS / non-Android GPS, Supabase & Local Notifications ---
   Future<void> _initIosNotifications() async {
     if (_iosNotifReady) return;
     try {
@@ -962,110 +971,120 @@ class ChikakuController extends ChangeNotifier {
     );
     _appendTrailPoint(myTrail, myLocation!.latLng);
     notifyListeners();
-    _sendDirectCurrentLocation();
+    await _sendDirectCurrentLocation();
   }
 
-  void _sendDirectCurrentLocation() {
-    if (isSharingPaused || myLocation == null || !isConnected) return;
-    _sendWs({'type': 'location', ...myLocation!.toJson()});
-  }
-
-  Future<void> _connectDirectWs() async {
-    await _disconnectDirectWs();
-    if (roomCode.isEmpty || serverUrl.isEmpty) return;
-
+  Future<void> _sendDirectCurrentLocation() async {
+    if (isSharingPaused || myLocation == null || !_directSupabase.isConnected) {
+      return;
+    }
     try {
-      _directChannel = WebSocketChannel.connect(Uri.parse(serverUrl));
-      await _directChannel!.ready;
+      await _directSupabase.updateLocation(
+        name: userName,
+        color: userColor,
+        bio: userBio,
+        location: myLocation!.toJson(),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _connectDirectSupabase() async {
+    if (roomCode.isEmpty || userId.isEmpty) return;
+    try {
+      final joined = await _directSupabase.joinRoom(
+        roomCode: roomCode,
+        userId: userId,
+        name: userName,
+        color: userColor,
+        bio: userBio,
+        onMemberChange: (row) {
+          final m = RoomMember.fromJson(row);
+          members[m.userId] = m;
+          if (m.location != null) {
+            final trail = memberTrails.putIfAbsent(m.userId, () => []);
+            _appendTrailPoint(trail, m.location!.latLng);
+          }
+          notifyListeners();
+        },
+        onMessageInsert: (row) {
+          final msg = ChatMessage.fromJson(row, userId);
+          if (!messages.any((m) => m.id == msg.id)) {
+            messages.add(msg);
+            if (defaultTargetPlatform == TargetPlatform.iOS && !msg.isMe) {
+              if (msg.type == ChatMessageType.voiceNote) {
+                _showIosNotification(
+                    '${msg.senderName} • Voice Note 🎤', 'Mengirim pesan suara');
+              } else if (msg.type == ChatMessageType.image) {
+                _showIosNotification(
+                    '${msg.senderName} • Foto 📷', 'Mengirim foto baru');
+              } else {
+                _showIosNotification(
+                    '${msg.senderName} 💬', msg.text ?? 'Pesan baru');
+              }
+            }
+            notifyListeners();
+          }
+        },
+        onEventInsert: (row) {
+          _handleEventRow(row);
+          if (defaultTargetPlatform == TargetPlatform.iOS) {
+            final sender = row['sender_name'] as String? ?? 'Pasangan';
+            if (row['type'] == 'nudge') {
+              _showIosNotification(
+                '${row['emoji'] ?? '👋'} $sender',
+                row['label'] as String? ?? 'Colek kamu!',
+              );
+            } else if (row['type'] == 'photo_request') {
+              _showIosNotification(
+                '📸 $sender Minta Foto',
+                'Tap untuk ambil foto kamera ${row['camera'] == 'front' ? 'Depan' : 'Belakang'}',
+              );
+            }
+          }
+        },
+        onStatusChange: (connected, error) {
+          isConnected = connected;
+          connectionError = error;
+          notifyListeners();
+          if (!connected) _scheduleDirectReconnect();
+        },
+      );
+
       isConnected = true;
       connectionError = null;
+      sessionExpiresAt = (joined['expiresAt'] as num?)?.toInt() ??
+          DateTime.now().add(const Duration(hours: 24)).millisecondsSinceEpoch;
 
-      _sendWs({
-        'type': 'join',
-        'roomCode': roomCode,
-        'userId': userId,
-        'name': userName,
-        'color': userColor,
-        'bio': userBio,
-      });
-      _sendDirectCurrentLocation();
-
-      _directHeartbeatTimer?.cancel();
-      _directHeartbeatTimer =
-          Timer.periodic(const Duration(seconds: 25), (_) {
-        if (isConnected) _sendWs({'type': 'ping'});
-      });
-
-      _directWsSub = _directChannel!.stream.listen(
-        (raw) {
-          try {
-            final data = jsonDecode(raw.toString()) as Map<String, dynamic>;
-            if (data['type'] == 'pong') return;
-            _handleWsMessage(data);
-            if (defaultTargetPlatform == TargetPlatform.iOS) {
-              _notifyIosIfNeeded(data);
-            }
-          } catch (_) {}
-        },
-        onError: (_) {
-          isConnected = false;
-          connectionError = 'Gagal terhubung ke server';
-          notifyListeners();
-          _scheduleDirectReconnect();
-        },
-        onDone: () {
-          isConnected = false;
-          notifyListeners();
-          _scheduleDirectReconnect();
-        },
-      );
-      notifyListeners();
-    } catch (_) {
-      isConnected = false;
-      connectionError = 'Server tidak terjangkau ($serverUrl)';
-      notifyListeners();
-      _scheduleDirectReconnect();
-    }
-  }
-
-  void _notifyIosIfNeeded(Map<String, dynamic> data) {
-    final type = data['type'] as String?;
-    if (type == 'message' && data['message'] is Map) {
-      final msg = data['message'] as Map;
-      if (msg['senderId'] != userId) {
-        final name = msg['senderName'] ?? 'Anggota';
-        if (msg['type'] == 'voice_note') {
-          _showIosNotification('$name • Voice Note 🎤', 'Mengirim pesan suara');
-        } else if (msg['type'] == 'image') {
-          _showIosNotification('$name • Foto 📷', 'Mengirim foto baru');
-        } else {
-          _showIosNotification('$name 💬', '${msg['text'] ?? 'Pesan baru'}');
+      members.clear();
+      for (final item in (joined['members'] as List)) {
+        final m = RoomMember.fromJson(Map<String, dynamic>.from(item as Map));
+        members[m.userId] = m;
+        if (m.location != null) {
+          final trail = memberTrails.putIfAbsent(m.userId, () => []);
+          _appendTrailPoint(trail, m.location!.latLng);
         }
       }
-    } else if (type == 'nudge') {
-      _showIosNotification(
-        '${data['emoji'] ?? '👋'} ${data['senderName'] ?? 'Pasangan'}',
-        '${data['label'] ?? 'Colek kamu!'}',
-      );
-    } else if (type == 'photo_request') {
-      _showIosNotification(
-        '📸 ${data['senderName'] ?? 'Pasangan'} Minta Foto',
-        'Tap untuk ambil foto kamera ${data['camera'] == 'front' ? 'Depan' : 'Belakang'}',
-      );
+
+      messages.clear();
+      for (final item in (joined['history'] as List)) {
+        messages.add(ChatMessage.fromJson(
+            Map<String, dynamic>.from(item as Map), userId));
+      }
+
+      await _sendDirectCurrentLocation();
+      notifyListeners();
+    } catch (e) {
+      isConnected = false;
+      connectionError = 'Gagal terhubung ke Supabase';
+      notifyListeners();
+      _scheduleDirectReconnect();
     }
   }
 
   void _scheduleDirectReconnect() {
     if (!isPaired) return;
     _directReconnectTimer?.cancel();
-    _directReconnectTimer = Timer(const Duration(seconds: 4), _connectDirectWs);
-  }
-
-  Future<void> _disconnectDirectWs() async {
-    _directReconnectTimer?.cancel();
-    _directHeartbeatTimer?.cancel();
-    await _directWsSub?.cancel();
-    await _directChannel?.sink.close();
-    _directChannel = null;
+    _directReconnectTimer =
+        Timer(const Duration(seconds: 5), _connectDirectSupabase);
   }
 }
